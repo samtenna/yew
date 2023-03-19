@@ -3,21 +3,23 @@ use gloo::timers::callback::{Interval, Timeout};
 use yew::{html, Component, Context, Html};
 
 pub enum Msg {
-    StartTimeout,
-    StartInterval,
-    Cancel,
-    Done,
-    Tick,
+    StartNotificationTimeout,
+    StartStopwatch,
+    ResetStopwatch,
+    StopStopwatch,
+    NotificationTimeoutDone,
+    StopwatchTick,
     UpdateTime,
 }
 
 pub struct App {
     time: String,
-    messages: Vec<&'static str>,
+    message: Option<String>,
     _standalone: (Interval, Interval),
-    interval: Option<Interval>,
-    timeout: Option<Timeout>,
+    stopwatch_interval: Option<Interval>,
+    notification_timeout: Option<Timeout>,
     console_timer: Option<Timer<'static>>,
+    stopwatch_count: u64,
 }
 
 impl App {
@@ -26,9 +28,12 @@ impl App {
         String::from(date.to_locale_time_string("en-US"))
     }
 
-    fn cancel(&mut self) {
-        self.timeout = None;
-        self.interval = None;
+    fn get_stopwatch_string(&self) -> String {
+        let seconds = self.stopwatch_count % 60;
+        let minutes = (self.stopwatch_count / 60) % 60;
+        let hours = (self.stopwatch_count / 3600) % 60;
+
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
     }
 }
 
@@ -47,67 +52,88 @@ impl Component for App {
 
         Self {
             time: App::get_current_time(),
-            messages: Vec::new(),
+            message: None,
             _standalone: (standalone_handle, clock_handle),
-            interval: None,
-            timeout: None,
+            stopwatch_interval: None,
+            notification_timeout: None,
             console_timer: None,
+            stopwatch_count: 0,
         }
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
-            Msg::StartTimeout => {
+            Msg::StartNotificationTimeout => {
                 let handle = {
                     let link = ctx.link().clone();
-                    Timeout::new(3, move || link.send_message(Msg::Done))
+                    Timeout::new(2000, move || {
+                        link.send_message(Msg::NotificationTimeoutDone)
+                    })
                 };
 
-                self.timeout = Some(handle);
+                self.notification_timeout = Some(handle);
 
-                self.messages.clear();
-                console::clear!();
-
-                self.messages.push("Timer started!");
                 self.console_timer = Some(Timer::new("Timer"));
                 true
             }
-            Msg::StartInterval => {
+            Msg::StartStopwatch => {
                 let handle = {
                     let link = ctx.link().clone();
-                    Interval::new(1, move || link.send_message(Msg::Tick))
+                    Interval::new(1000, move || link.send_message(Msg::StopwatchTick))
                 };
-                self.interval = Some(handle);
+                self.stopwatch_interval = Some(handle);
 
-                self.messages.clear();
+                self.message = Some(String::from("Started stopwatch!"));
+                ctx.link()
+                    .clone()
+                    .send_message(Msg::StartNotificationTimeout);
+
                 console::clear!();
-
-                self.messages.push("Interval started!");
+                console::warn!("Started stopwatch!");
                 true
             }
-            Msg::Cancel => {
-                self.cancel();
-                self.messages.push("Canceled!");
-                console::warn!("Canceled!");
+            Msg::ResetStopwatch => {
+                self.stopwatch_count = 0;
+
+                self.message = Some(String::from("Reset stopwatch!"));
+                ctx.link()
+                    .clone()
+                    .send_message(Msg::StartNotificationTimeout);
+
+                console::clear!();
+                console::warn!("Reset stopwatch.");
                 true
             }
-            Msg::Done => {
-                self.cancel();
-                self.messages.push("Done!");
+            Msg::StopStopwatch => {
+                self.stopwatch_interval = None;
 
+                self.message = Some(String::from("Stopped stopwatch!"));
+                ctx.link()
+                    .clone()
+                    .send_message(Msg::StartNotificationTimeout);
+
+                console::clear!();
+                console::warn!("Stopped stopwatch!");
+                true
+            }
+            Msg::NotificationTimeoutDone => {
                 // todo weblog
                 // ConsoleService::group();
-                console::info!("Done!");
+                console::info!("Notification timeout done!");
                 if let Some(timer) = self.console_timer.take() {
                     drop(timer);
                 }
+
+                self.message = None;
 
                 // todo weblog
                 // ConsoleService::group_end();
                 true
             }
-            Msg::Tick => {
-                self.messages.push("Tick...");
+            Msg::StopwatchTick => {
+                //self.messages.push("Tick...");
+                self.stopwatch_count += 1;
+
                 // todo weblog
                 // ConsoleService::count_named("Tick");
                 true
@@ -120,26 +146,35 @@ impl Component for App {
     }
 
     fn view(&self, ctx: &Context<Self>) -> Html {
-        let has_job = self.timeout.is_some() || self.interval.is_some();
+        let stopwatch_running = self.stopwatch_interval.is_some();
+        let message = if self.message.is_some() {
+            self.message.clone().unwrap()
+        } else {
+            "".to_string()
+        };
+
         html! {
             <>
-                <div id="buttons">
-                    <button disabled={has_job} onclick={ctx.link().callback(|_| Msg::StartTimeout)}>
-                        { "Start Timeout" }
-                    </button>
-                    <button disabled={has_job} onclick={ctx.link().callback(|_| Msg::StartInterval)}>
-                        { "Start Interval" }
-                    </button>
-                    <button disabled={!has_job} onclick={ctx.link().callback(|_| Msg::Cancel)}>
-                        { "Cancel!" }
-                    </button>
-                </div>
                 <div id="wrapper">
-                    <div id="time">
-                        { &self.time }
+                    <div class="item-container" id="time">
+                        <h3>{ "Clock" }</h3>
+                        <h4>{ &self.time }</h4>
+                        <div><button style="opacity: 0;">{"."}</button></div>
                     </div>
-                    <div id="messages">
-                        { for self.messages.iter().map(|message| html! { <p>{ message }</p> }) }
+                    <div class="item-container">
+                        <h3>{ "Stopwatch" }</h3>
+
+                        <h4>{ &self.get_stopwatch_string() }</h4>
+                        <div class="buttons-container">
+                            <button type="button" disabled={stopwatch_running} onclick={ctx.link().callback(|_| Msg::StartStopwatch)}>{ "Start" }</button>
+                            <button type="button" disabled={!stopwatch_running} onclick={ctx.link().callback(|_| Msg::StopStopwatch)}>{ "Stop" }</button>
+                            <button type="button" disabled={stopwatch_running} onclick={ctx.link().callback(|_| Msg::ResetStopwatch)}>{ "Reset" }</button>
+                        </div>
+                    </div>
+                    <div class="item-container">
+                        <h3>{ "Notifications" }</h3>
+                        <p id="notification">{ message }</p>
+                        <div><button style="opacity: 0;">{"."}</button></div>
                     </div>
                 </div>
             </>
